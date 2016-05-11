@@ -1,0 +1,4 @@
+SampleWWorldCities/*
+System/*
+Utilities/*
+*.lock
