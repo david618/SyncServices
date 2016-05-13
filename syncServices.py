@@ -46,7 +46,7 @@ dst_home = "/home/ags"
 # Logging
 log_to_file = False
 log_level = logging.DEBUG
-log_file_basename = "copyMapServices"
+log_file_basename = "syncServices"
 log = logging.getLogger()
 
 # Create standard headers for all json requests
@@ -178,7 +178,8 @@ def edit_service(folderName,serviceName,token,httpConn,serviceInfo,typ):
         editService = dst_serverurl + "/arcgis/admin/services/" + folderName + "/" + serviceName + "." + typ + "/edit"
         logging.debug("editService: " + editService)
 
-        serviceInfoJson = json.dumps(serviceInfo)   
+        serviceInfoJson = json.dumps(serviceInfo)
+        serviceInfoJson = serviceInfoJson.replace(src_server, dst_server)
 
         params = urllib.urlencode({'token': token, 'f': 'json', 'service': serviceInfoJson})
         httpConn.request("POST", editService, params, headers)
@@ -187,7 +188,7 @@ def edit_service(folderName,serviceName,token,httpConn,serviceInfo,typ):
         respJson = response.read()
         resp = json.loads(respJson)
 
-        print resp
+        logging.debug(respJson)
         
         if resp['status'] == 'success':
             logging.debug("Edited")
@@ -213,6 +214,7 @@ def create_service(folderName,serviceName,token,httpConn,serviceInfo):
         logging.debug("createService: " + createService)
 
         serviceInfoJson = json.dumps(serviceInfo)
+        serviceInfoJson = serviceInfoJson.replace(src_server, dst_server)
 
         params = urllib.urlencode({'token': token, 'f': 'json', 'service': serviceInfoJson})
         httpConn.request("POST", createService, params, headers)
@@ -221,7 +223,7 @@ def create_service(folderName,serviceName,token,httpConn,serviceInfo):
         respJson = response.read()
         resp = json.loads(respJson)
 
-        print resp
+        logging.debug(respJson)
         
         if resp['status'] == 'success':
             logging.debug("Created")
@@ -246,7 +248,7 @@ def del_service(url,token,httpConn):
         
         response = httpConn.getresponse()
         respJson = response.read()
-        print respJson
+        logging.debug(respJson)
         resp = json.loads(respJson)
         if resp['status'] == 'success':
             logging.debug("Deleted")
@@ -325,16 +327,20 @@ def copy_service(folderName,serviceName,src_Token,src_httpConn,dst_Token,dst_htt
         src_httpConn.request("POST", src_serverurl + path, params, headers)
         response = src_httpConn.getresponse()
         srcServiceInfoJson = response.read()
-        srcServiceInfoJsonOrig = srcServiceInfoJson
-
-        # Replacing paths 
-        srcServiceInfoJsonOrig = srcServiceInfoJsonOrig.replace(src_server, dst_server)
-        srcServiceInfoJsonOrig = srcServiceInfoJsonOrig.replace(src_home.replace("/","\\\\"),dst_home.replace("/","\\\\"))
-        srcServiceInfoJsonOrig = srcServiceInfoJsonOrig.replace(src_home,dst_home)
-        
-        srcServiceInfo = json.loads(srcServiceInfoJsonOrig)
+        srcServiceInfo = json.loads(srcServiceInfoJson)
         if (srcServiceInfo.has_key('status')):
             raise Exception("Source Service not Found")
+            
+        # Replacing paths
+        src_urlparts = urlparse.urlparse(src_serverurl)
+        dst_urlparts = urlparse.urlparse(dst_serverurl)        
+
+        srcServiceInfoJsonMod = srcServiceInfoJson
+        srcServiceInfoJsonMod = srcServiceInfoJsonMod.replace(src_serverurl,dst_serverurl)
+        srcServiceInfoJsonMod = srcServiceInfoJsonMod.replace(src_urlparts.netloc,dst_urlparts.netloc)
+        srcServiceInfoJsonMod = srcServiceInfoJsonMod.replace(src_home.replace("/","\\\\"),dst_home.replace("/","\\\\"))
+        srcServiceInfoJsonMod = srcServiceInfoJsonMod.replace(src_home,dst_home)
+        srcServiceInfoMod = json.loads(srcServiceInfoJsonMod)
 
         params = urllib.urlencode({'token': dst_Token, 'f': 'json'})
         dst_httpConn.request("POST", dst_serverurl + path, params, headers)
@@ -344,51 +350,41 @@ def copy_service(folderName,serviceName,src_Token,src_httpConn,dst_Token,dst_htt
         if (dstServiceInfo.has_key('status')):
             # The service does not exist on dst server Copy
             logging.debug("Create New service")
-            create_service(folderName,serviceName,dst_Token,dst_httpConn,strServiceInfo)
+            create_service(folderName,serviceName,dst_Token,dst_httpConn,srcServiceInfoMod)
         else:
-            # The service does exist compare ServiceInfo
-            srcServiceInfo['properties']['filePath'] = "<<PATH>>"
-            dstServiceInfo['properties']['filePath'] = "<<PATH>>"
+            # The service does exist compare
+            srcTest = srcServiceInfoMod
+            dstTest = dstServiceInfo
+            
             #logging.debug(srcServiceInfo)
-            if srcServiceInfo.has_key('extensions'):
-                srcServiceInfo['extensions'].sort()                
-            if dstServiceInfo.has_key('extensions'):
-                dstServiceInfo['extensions'].sort()                
-                      
-            srcServiceInfoJson = json.dumps(srcServiceInfo)
-            dstServiceInfoJson = json.dumps(dstServiceInfo)
+            if srcTest.has_key('extensions'):
+                srcTest['extensions'].sort()                
+            if dstTest.has_key('extensions'):
+                dstTest['extensions'].sort()                
 
-            src_urlparts = urlparse.urlparse(src_serverurl)
-            dst_urlparts = urlparse.urlparse(dst_serverurl)
-
-            srcServiceInfoJson = srcServiceInfoJson.replace(src_urlparts.netloc,"<<<SERVERURL>>>")
-            dstServiceInfoJson = dstServiceInfoJson.replace(dst_urlparts.netloc,"<<<SERVERURL>>>")
-
-            s1 = json.loads(srcServiceInfoJson)
-            d1 = json.loads(dstServiceInfoJson)
 
             # ***********************************************************************************************
-            # This segement of code is useful for debugging why src and dst are identified as equal or not
-##            print s1
-##            print d1
+            # This segement of code is useful for debugging why src and dst are identified as equal or why they are not equal
+##            print srcTest
+##            print dstTest
 ##
-##            print d1 == s1
+##            print dstTest == srcTest
 ##
-##            for k in d1:
-##                if d1[k] != s1[k]:
+##            for k in dstTest:
+##                if dstTest[k] != srcTest[k]:
 ##                    print k
-##                    print d1[k]
-##                    print s1[k]
+##                    print dstTest[k]
+##                    print srcTest[k]
 
             # ***********************************************************************************************
             
-            if s1 == d1:
+            if srcTest == dstTest:
                 # Services are the same
                 logging.debug("Service are identical")
             else:
+                # Service has changed
                 logging.debug("Update the Service")
-
-                edit_service(folderName,serviceName,dst_Token,dst_httpConn,json.loads(srcServiceInfoJsonOrig),typ)
+                edit_service(folderName,serviceName,dst_Token,dst_httpConn,srcServiceInfoMod,typ)
         
 
     except Exception as e:
@@ -424,7 +420,7 @@ def copy_services(src_Token,src_httpConn,src_ssl,dst_Token,dst_httpConn,dst_ssl)
         for service in services:
             typ = service['type']
             if typ in ['MapServer','ImageServer','GPServer']:
-                # Only  process Map Services
+                # Only  process Map/Image/GP Services
                 serviceName = str(service['serviceName'])
 
                 '''
